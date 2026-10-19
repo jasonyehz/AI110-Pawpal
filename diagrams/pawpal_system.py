@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
 PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3}
@@ -27,7 +27,10 @@ class Task:
     due_date: date = field(default_factory=date.today)
 
     def __post_init__(self) -> None:
-        """Normalize priority and frequency, and reject invalid values."""
+        """Normalize priority and frequency, and reject an empty description or an
+        invalid duration, priority, frequency, or preferred time."""
+        if not self.description.strip():
+            raise ValueError("description can't be empty")
         self.priority = self.priority.lower()
         self.frequency = self.frequency.lower()
         if self.duration_minutes <= 0:
@@ -36,6 +39,11 @@ class Task:
             raise ValueError(f"priority must be one of {list(PRIORITY_RANK)}")
         if self.frequency not in FREQUENCIES:
             raise ValueError(f"frequency must be one of {list(FREQUENCIES)}")
+        if self.time is not None:
+            try:
+                datetime.strptime(self.time, "%H:%M")
+            except ValueError:
+                raise ValueError(f'time must look like "HH:MM", got {self.time!r}') from None
 
     @property
     def priority_rank(self) -> int:
@@ -50,13 +58,15 @@ class Task:
         """Build the next occurrence of a recurring task.
 
         Daily tasks are due 1 day later and weekly tasks 7 days later, using
-        ``timedelta`` so month and year rollovers are handled correctly. The copy is
-        not completed and keeps the pet name. Returns None for "once" tasks.
+        ``timedelta`` so month and year rollovers are handled correctly. The step is
+        added to the later of the due date and today, so completing an overdue task
+        never creates a copy that is already overdue. The copy is not completed and
+        keeps the pet name. Returns None for "once" tasks.
         """
         step = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}.get(self.frequency)
         if step is None:
             return None
-        return replace(self, completed=False, due_date=self.due_date + step)
+        return replace(self, completed=False, due_date=max(self.due_date, date.today()) + step)
 
     def reset(self) -> None:
         """Mark the task as not done, e.g. when a recurring task comes around again."""
@@ -99,8 +109,12 @@ class Pet:
         self.tasks.append(task)
 
     def remove_task(self, task: Task) -> None:
-        """Remove a task from this pet."""
-        self.tasks.remove(task)
+        """Remove this exact task from the pet (not just an equal-looking one)."""
+        for i, existing in enumerate(self.tasks):
+            if existing is task:
+                del self.tasks[i]
+                return
+        raise ValueError("Task does not belong to this pet")
 
 
 @dataclass
@@ -110,6 +124,11 @@ class Owner:
     name: str
     available_minutes: int
     pets: List[Pet] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Reject a negative amount of available time."""
+        if self.available_minutes < 0:
+            raise ValueError("available_minutes can't be negative")
 
     def add_pet(self, pet: Pet) -> None:
         """Add a pet to this owner."""
@@ -271,8 +290,12 @@ class Scheduler:
         return plan
 
     def explain_plan(self) -> str:
-        """Describe the plan in plain text, including skipped tasks and why."""
-        plan = self.plan if self.plan is not None else self.generate_plan()
+        """Describe the plan in plain text, including skipped tasks and why.
+
+        Regenerates the plan first, so the explanation always reflects the owner's
+        current tasks (planning is deterministic, so unchanged tasks give the same plan).
+        """
+        plan = self.generate_plan()
 
         lines = [
             f"Plan for {self.owner.name}: {plan.total_minutes} of "

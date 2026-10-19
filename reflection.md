@@ -26,12 +26,9 @@ Additionally, tasks had durations but no start times, so the daily plan is merel
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+One issue I noticed was that my conflict detection only flags tasks that share the exact same date and preferred time (for example, two tasks at 19:00). It does not check overlapping durations, so a 30-minute walk at 08:00 and a feeding at 08:15 are not flagged even though they overlap. It also only returns warning messages, and it never blocks a task or reschedules anything.
 
-My conflict detection only flags tasks that share the exact same date and preferred time (for example, two tasks at 19:00). It does not check overlapping durations, so a 30-minute walk at 08:00 and a feeding at 08:15 are not flagged even though they overlap. It also only returns warning messages; it never blocks a task or reschedules anything.
-
-This is reasonable for PawPal+ because a preferred time is a loose preference, not a hard appointment, and the plan itself is built from durations and available minutes, so tasks never actually overlap in the generated schedule. An exact-match check is a single pass over the tasks, is easy to read and test, and catches the most obvious mistake (double-booking the same moment) without making the app complicated. A full interval-overlap check would be more precise, but it adds more code and edge cases than a simple pet-care planner needs.
+This is reasonable for pawpal because a preferred time is not set in stone, and the plan itself is built from durations and available minutes, so tasks never actually overlap in the generated schedule. An exact-match check is a single pass over the tasks, is easy to read and test, and catches the most obvious mistake without making the app complicated. A full interval-overlap check would be more precise, but it adds more code and edge cases than a simple pet-care planner needs.
 
 ---
 

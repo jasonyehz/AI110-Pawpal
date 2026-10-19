@@ -69,32 +69,52 @@ Total: 85/90 min
 
 ## 🧪 Testing PawPal+
 
-```bash
-# Run the full test suite:
-pytest
+Run the full test suite from the project root:
 
-# Run with coverage:
-pytest --cov
+```bash
+python -m pytest
 ```
+
+(On a machine where `python` isn't available, use `python3 -m pytest`, or activate `.venv` first.)
+
+The 47 tests in `tests/test_pawpal.py` cover the scheduler logic in `diagrams/pawpal_system.py`:
+
+- **Basics:** marking a task complete, and adding a task to a pet.
+- **Sorting:** chronological order by time, untimed tasks last, unpadded times like "9:05", ties keep their order, and priority/time/duration ordering for plans.
+- **Filtering:** by completion status, by pet (case-insensitive), both together, and unknown or empty pets.
+- **Recurring tasks:** daily is +1 day and weekly is +7 days, including month, year and leap-day rollovers; "once" tasks create nothing; no duplicates on repeat completion; completing a task the owner doesn't have raises an error.
+- **Conflict detection:** same time for the same pet and across pets, three-way clashes, and no false alarms for completed tasks, untimed tasks, or the same time on different dates.
+- **Plan generation:** tasks placed back to back, exact fits, skipping oversized tasks while smaller ones still fit, and empty cases (no pets, no tasks, all complete, zero available minutes).
+- **Validation:** an empty description, bad duration, priority, frequency, malformed "HH:MM" times, and negative available time are rejected.
+- **Regressions:** overdue recurring tasks never reschedule into the past, `explain_plan()` is never stale, and `remove_task()` removes the exact task.
 
 Sample test output:
 
 ```
-# Paste your pytest output here
+============================= test session starts ==============================
+platform darwin -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/jasonyeh/CS/AI110-Pawpal
+plugins: anyio-4.15.1
+collected 47 items
+
+tests/test_pawpal.py ...............................................     [100%]
+
+============================== 47 passed in 0.03s ==============================
 ```
+
+**Confidence Level: ⭐⭐⭐⭐ (4/5)**
+
+All 47 tests pass, and they cover the happy paths and the main edge cases for sorting, filtering, recurrence, conflicts and planning. They also caught a real bug (malformed times were accepted) before it reached the UI. I stopped at four stars because the Streamlit UI was only checked with a headless run, not automated tests, conflict detection only flags exact time matches (not overlapping durations), and the greedy planner's tradeoffs are covered by only a few cases.
 
 ## 📐 Smarter Scheduling
 
-Every feature below lives in `diagrams/pawpal_system.py` and reads tasks through the `Owner`.
+All of this lives in `diagrams/pawpal_system.py`.
 
-| Feature | Method(s) | What it does |
-|---------|-----------|--------------|
-| Sorting by time | `Scheduler.sort_by_time()` | Orders tasks by preferred "HH:MM" time, earliest first, with untimed tasks last. Times are compared as minutes (via `to_minutes()`), so "9:05" correctly sorts before "12:00". |
-| Sorting for the plan | `Scheduler.sort_tasks()` | Orders by priority (high first), then preferred time, then shortest duration. |
-| Filtering | `Scheduler.filter_tasks(completed=, pet_name=)` | Keeps only done or not-done tasks, and/or one pet's tasks (case-insensitive). Both filters can be combined. Also see `get_pending_tasks()` and `get_tasks_for_pet()`. |
-| Fitting to available time | `Scheduler.generate_plan()` | Greedily places due, pending tasks in sorted order until the owner's time runs out. Tasks that don't fit are skipped with a reason, and smaller tasks can still fill the gap. `explain_plan()` describes the result. |
-| Conflict detection | `Scheduler.detect_conflicts()` | Flags pending tasks that share the exact same date and preferred time, for the same pet or across pets. Returns warning strings instead of raising errors; an empty list means no conflicts. Overlapping durations are not checked. |
-| Recurring tasks | `Task.next_occurrence()`, `Scheduler.mark_task_complete()` | Completing a "daily" task creates a new copy due +1 day, and a "weekly" task +7 days (using `timedelta`). "once" tasks create nothing. `Scheduler.get_due_tasks()` keeps future occurrences out of today's plan. |
+- **Sorting:** `Scheduler.sort_by_time()` orders tasks by their "HH:MM" time, earliest first, with untimed tasks last. `Scheduler.sort_tasks()` orders by priority, then time, then shortest.
+- **Filtering:** `Scheduler.filter_tasks()` keeps tasks by completion status, by pet name, or both.
+- **Conflict detection:** `Scheduler.detect_conflicts()` returns warnings for tasks at the exact same date and time. It never raises an error.
+- **Recurring tasks:** `Scheduler.mark_task_complete()` creates the next daily (+1 day) or weekly (+7 days) task using `Task.next_occurrence()`.
+- **Planning:** `Scheduler.generate_plan()` fits due tasks into the available time, and `explain_plan()` says why.
 
 ## 📸 Demo Walkthrough
 
