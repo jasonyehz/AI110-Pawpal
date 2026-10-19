@@ -23,7 +23,9 @@ classDiagram
         +String frequency
         +bool completed
         +String pet_name
+        +date due_date
         +mark_complete() void
+        +next_occurrence() Task
         +reset() void
     }
 
@@ -42,8 +44,13 @@ classDiagram
         +Owner owner
         +Plan plan
         +get_pending_tasks() List~Task~
+        +get_due_tasks(on) List~Task~
+        +detect_conflicts(tasks) List~String~
+        +mark_task_complete(task) Task
         +get_tasks_for_pet(pet_name) List~Task~
+        +filter_tasks(completed, pet_name) List~Task~
         +sort_tasks(tasks) List~Task~
+        +sort_by_time(tasks) List~Task~
         +generate_plan() Plan
         +explain_plan() String
     }

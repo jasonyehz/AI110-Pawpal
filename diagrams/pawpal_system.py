@@ -1,8 +1,16 @@
-from dataclasses import dataclass, field
+from collections import defaultdict
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
 PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3}
 FREQUENCIES = ("once", "daily", "weekly")
+
+
+def to_minutes(hhmm: str) -> int:
+    """Convert an "HH:MM" string to minutes since midnight (e.g. "09:30" -> 570)."""
+    hours, minutes = hhmm.split(":")
+    return int(hours) * 60 + int(minutes)
 
 
 @dataclass
@@ -16,6 +24,7 @@ class Task:
     frequency: str = "once"  # once | daily | weekly
     completed: bool = False
     pet_name: str = ""
+    due_date: date = field(default_factory=date.today)
 
     def __post_init__(self) -> None:
         """Normalize priority and frequency, and reject invalid values."""
@@ -36,6 +45,18 @@ class Task:
     def mark_complete(self) -> None:
         """Mark the task as done."""
         self.completed = True
+
+    def next_occurrence(self) -> Optional["Task"]:
+        """Build the next occurrence of a recurring task.
+
+        Daily tasks are due 1 day later and weekly tasks 7 days later, using
+        ``timedelta`` so month and year rollovers are handled correctly. The copy is
+        not completed and keeps the pet name. Returns None for "once" tasks.
+        """
+        step = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}.get(self.frequency)
+        if step is None:
+            return None
+        return replace(self, completed=False, due_date=self.due_date + step)
 
     def reset(self) -> None:
         """Mark the task as not done, e.g. when a recurring task comes around again."""
@@ -115,29 +136,124 @@ class Scheduler:
         """All tasks across the owner's pets that are not yet completed."""
         return [t for t in self.owner.get_all_tasks() if not t.completed]
 
+    def get_due_tasks(self, on: Optional[date] = None) -> List[Task]:
+        """Pending tasks due on or before the given date (default: today).
+
+        Used by generate_plan() so a recurring task's next occurrence (due in the
+        future) does not show up in today's plan.
+        """
+        on = on or date.today()
+        return [t for t in self.get_pending_tasks() if t.due_date <= on]
+
+    def detect_conflicts(self, tasks: Optional[List[Task]] = None) -> List[str]:
+        """Lightweight conflict check that returns warning messages instead of raising.
+
+        Groups pending tasks that have a preferred time by (due date, time in minutes)
+        in a single pass. Any group with 2+ tasks produces one warning that says whether
+        the clash is for one pet or across pets. Only exact matches are detected;
+        overlapping durations are not checked. Returns an empty list when clear.
+        """
+        if tasks is None:
+            tasks = self.get_pending_tasks()
+        slots = defaultdict(list)
+        for t in tasks:
+            if t.time and not t.completed:
+                slots[(t.due_date, to_minutes(t.time))].append(t)
+
+        warnings = []
+        for (due, minute), group in sorted(slots.items()):
+            if len(group) > 1:
+                pets = {t.pet_name for t in group}
+                scope = f"for {pets.pop()}" if len(pets) == 1 else "across pets"
+                names = ", ".join(f"{t.description} ({t.pet_name})" for t in group)
+                warnings.append(
+                    f"Conflict {scope}: {len(group)} tasks at {minute // 60:02d}:{minute % 60:02d} "
+                    f"on {due}: {names}"
+                )
+        return warnings
+
+    def mark_task_complete(self, task: Task) -> Optional[Task]:
+        """Mark a task complete and schedule its next occurrence if it recurs.
+
+        Finds the pet that owns the task, completes it, and for daily/weekly tasks
+        adds the next occurrence (see Task.next_occurrence) to that same pet.
+        Returns the new task, or None if nothing was created (a "once" task, or a
+        task that was already complete). Raises ValueError if the task isn't one of
+        this owner's tasks.
+        """
+        pet = next((p for p in self.owner.pets if any(t is task for t in p.tasks)), None)
+        if pet is None:
+            raise ValueError("Task does not belong to any of this owner's pets")
+        if task.completed:
+            return None  # already done, so don't spawn a duplicate
+        task.mark_complete()
+        next_task = task.next_occurrence()
+        if next_task is not None:
+            pet.add_task(next_task)
+        return next_task
+
     def get_tasks_for_pet(self, pet_name: str) -> List[Task]:
         """All tasks belonging to the pet with the given name."""
         return [t for t in self.owner.get_all_tasks() if t.pet_name == pet_name]
 
+    def filter_tasks(
+        self, completed: Optional[bool] = None, pet_name: Optional[str] = None
+    ) -> List[Task]:
+        """Filter tasks across all pets by completion status and/or pet name.
+
+        Reads tasks through the owner. ``completed=True/False`` keeps only done/not-done
+        tasks, ``pet_name`` keeps one pet's tasks (case-insensitive), and passing both
+        applies both filters. With no arguments every task is returned.
+        """
+        tasks = self.owner.get_all_tasks()
+        if completed is not None:
+            tasks = [t for t in tasks if t.completed == completed]
+        if pet_name is not None:
+            tasks = [t for t in tasks if t.pet_name.lower() == pet_name.lower()]
+        return tasks
+
     def sort_tasks(self, tasks: List[Task]) -> List[Task]:
-        """Highest priority first, then earliest preferred time, then shortest."""
+        """Order tasks for planning: highest priority first.
+
+        Ties break by earliest preferred time (tasks without a time go last), then by
+        shortest duration.
+        """
         return sorted(
             tasks,
             key=lambda t: (
                 -t.priority_rank,
                 t.time is None,
-                t.time or "",
+                to_minutes(t.time) if t.time else 0,
                 t.duration_minutes,
             ),
         )
 
+    def sort_by_time(self, tasks: Optional[List[Task]] = None) -> List[Task]:
+        """Sort tasks by preferred "HH:MM" time, earliest first, untimed tasks last.
+
+        Uses sorted() with a lambda key of (has no time, minutes since midnight). Times
+        are compared as numbers, not strings, so "9:05" correctly sorts before "12:00".
+        Defaults to all of the owner's tasks when no list is given.
+        """
+        if tasks is None:
+            tasks = self.owner.get_all_tasks()
+        return sorted(
+            tasks,
+            key=lambda t: (t.time is None, to_minutes(t.time) if t.time else 0),
+        )
+
     def generate_plan(self) -> Plan:
-        """Greedily fit pending tasks into the owner's available time."""
+        """Greedily fit due, pending tasks into the owner's available time.
+
+        Tasks are taken in sort_tasks() order. Each is placed back to back if it fits in
+        the remaining minutes; otherwise it is skipped with a reason and later, smaller
+        tasks can still fill the gap. The result is stored in self.plan and returned.
+        """
         plan = Plan()
         cursor = 0
         budget = self.owner.available_minutes
 
-        for task in self.sort_tasks(self.get_pending_tasks()):
+        for task in self.sort_tasks(self.get_due_tasks()):
             if cursor + task.duration_minutes <= budget:
                 plan.scheduled.append(ScheduledTask(task, cursor))
                 cursor += task.duration_minutes
