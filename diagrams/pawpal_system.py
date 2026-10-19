@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -8,9 +8,26 @@ class Task:
     duration_minutes: int
     priority: str
     completed: bool = False
+    pet_name: str = ""
 
     def mark_complete(self) -> None:
         pass
+
+
+@dataclass
+class ScheduledTask:
+    task: Task
+    start_minute: int
+
+    @property
+    def end_minute(self) -> int:
+        return self.start_minute + self.task.duration_minutes
+
+
+@dataclass
+class Plan:
+    scheduled: List[ScheduledTask] = field(default_factory=list)
+    skipped: List[Tuple[Task, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -39,8 +56,9 @@ class Owner:
 class Scheduler:
     def __init__(self, owner: Owner) -> None:
         self.owner = owner
+        self.plan: Optional[Plan] = None
 
-    def generate_plan(self) -> List[Task]:
+    def generate_plan(self) -> Plan:
         raise NotImplementedError
 
     def explain_plan(self) -> str:

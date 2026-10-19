@@ -12,8 +12,8 @@ Scheduler: The planning logic that makes schedules that work for everyone.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+I asked Claude to check if my skeleton's logic made sense and it identified a couple issues. First, my task class doesn't know specific pets as it flattens tasks across all pets. The solution was to add a pet_name or pet field on task and return (pet, task) pairs.
+Additionally, tasks had durations but no start times, so the daily plan is merely an ordered list. The solution was to created a start_time function.
 
 ---
 

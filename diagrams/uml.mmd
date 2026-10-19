@@ -19,16 +19,32 @@ classDiagram
         +int duration_minutes
         +String priority
         +bool completed
+        +String pet_name
         +mark_complete() void
+    }
+
+    class ScheduledTask {
+        +Task task
+        +int start_minute
+        +end_minute() int
+    }
+
+    class Plan {
+        +List~ScheduledTask~ scheduled
+        +List~Task, String~ skipped
     }
 
     class Scheduler {
         +Owner owner
-        +generate_plan() List~Task~
+        +Plan plan
+        +generate_plan() Plan
         +explain_plan() String
     }
 
     Owner "1" *-- "0..*" Pet : has
     Pet "1" *-- "0..*" Task : has
     Scheduler --> Owner : plans for
-    Scheduler ..> Task : orders
+    Scheduler --> Plan : produces
+    Plan "1" *-- "0..*" ScheduledTask : contains
+    ScheduledTask --> Task : wraps
+    Plan ..> Task : skipped
