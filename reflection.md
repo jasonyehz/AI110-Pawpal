@@ -4,8 +4,11 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+My initial UML design will have four classes:
+Owner: Holds information about the pet's owner and availability.
+Pet: Holds information about the pet and its tasks
+Task: Holds information about the type of task, duration, priotiy and can be marked complete.
+Scheduler: The planning logic that makes schedules that work for everyone.
 
 **b. Design changes**
 
