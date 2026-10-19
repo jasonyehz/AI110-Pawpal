@@ -1,8 +1,12 @@
+import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple, Union
 
+PathLike = Union[str, "os.PathLike[str]"]
 PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3}
 FREQUENCIES = ("once", "daily", "weekly")
 
@@ -54,19 +58,51 @@ class Task:
         """Mark the task as done."""
         self.completed = True
 
-    def next_occurrence(self) -> Optional["Task"]:
-        """Build the next occurrence of a recurring task.
+    def next_occurrence(self, today: Optional[date] = None) -> Optional["Task"]:
+        """Build the next occurrence of a recurring task, or None for "once" tasks.
 
-        Daily tasks are due 1 day later and weekly tasks 7 days later, using
-        ``timedelta`` so month and year rollovers are handled correctly. The step is
-        added to the later of the due date and today, so completing an overdue task
-        never creates a copy that is already overdue. The copy is not completed and
-        keeps the pet name. Returns None for "once" tasks.
+        Daily: due the day after the later of the due date and today.
+        Weekly: due on the same weekday as before, at least 7 days after the old due
+        date and strictly after today, so a late task skips the weeks it missed
+        without drifting to a different weekday. The copy is not completed and keeps
+        the pet name. ``timedelta`` handles month, year and leap-year rollovers.
         """
-        step = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}.get(self.frequency)
-        if step is None:
+        today = today or date.today()
+        if self.frequency == "daily":
+            next_due = max(self.due_date, today) + timedelta(days=1)
+        elif self.frequency == "weekly":
+            earliest = max(self.due_date + timedelta(days=7), today + timedelta(days=1))
+            next_due = earliest + timedelta(days=(self.due_date.weekday() - earliest.weekday()) % 7)
+        else:
             return None
-        return replace(self, completed=False, due_date=max(self.due_date, date.today()) + step)
+        return replace(self, completed=False, due_date=next_due)
+
+    def to_dict(self) -> dict:
+        """Plain-dict form of this task for JSON (the date becomes an ISO string)."""
+        return {
+            "description": self.description,
+            "duration_minutes": self.duration_minutes,
+            "priority": self.priority,
+            "time": self.time,
+            "frequency": self.frequency,
+            "completed": self.completed,
+            "pet_name": self.pet_name,
+            "due_date": self.due_date.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a task from to_dict() output; the constructor re-validates it."""
+        return cls(
+            description=data["description"],
+            duration_minutes=data["duration_minutes"],
+            priority=data["priority"],
+            time=data["time"],
+            frequency=data["frequency"],
+            completed=data["completed"],
+            pet_name=data["pet_name"],
+            due_date=date.fromisoformat(data["due_date"]),
+        )
 
     def reset(self) -> None:
         """Mark the task as not done, e.g. when a recurring task comes around again."""
@@ -116,6 +152,18 @@ class Pet:
                 return
         raise ValueError("Task does not belong to this pet")
 
+    def to_dict(self) -> dict:
+        """Plain-dict form of this pet and its tasks for JSON."""
+        return {"name": self.name, "species": self.species, "tasks": [t.to_dict() for t in self.tasks]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Pet":
+        """Rebuild a pet and its tasks from to_dict() output."""
+        pet = cls(name=data["name"], species=data["species"])
+        for task_data in data["tasks"]:
+            pet.add_task(Task.from_dict(task_data))
+        return pet
+
 
 @dataclass
 class Owner:
@@ -137,6 +185,45 @@ class Owner:
     def get_all_tasks(self) -> List[Task]:
         """Every task from every pet, together in one list."""
         return [task for pet in self.pets for task in pet.tasks]
+
+    def to_dict(self) -> dict:
+        """Plain-dict form of the owner, pets and tasks for JSON."""
+        return {
+            "name": self.name,
+            "available_minutes": self.available_minutes,
+            "pets": [p.to_dict() for p in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Owner":
+        """Rebuild an owner (with pets and tasks) from to_dict() output."""
+        owner = cls(name=data["name"], available_minutes=data["available_minutes"])
+        for pet_data in data["pets"]:
+            owner.add_pet(Pet.from_dict(pet_data))
+        return owner
+
+    def save_to_json(self, path: PathLike = "data.json") -> None:
+        """Save this owner, their pets and all tasks to a JSON file.
+
+        Writes to a temporary file first and then swaps it in, so a crash mid-write
+        can't leave a half-written data file behind.
+        """
+        path = Path(path)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(self.to_dict(), indent=2))
+        os.replace(tmp, path)
+
+    @classmethod
+    def load_from_json(cls, path: PathLike = "data.json") -> "Owner":
+        """Load an owner from a JSON file written by save_to_json().
+
+        Raises FileNotFoundError if the file is missing and ValueError if it isn't
+        valid JSON or holds invalid data (bad priority, missing fields, and so on).
+        """
+        try:
+            return cls.from_dict(json.loads(Path(path).read_text()))
+        except (KeyError, TypeError, AttributeError) as err:
+            raise ValueError(f"Invalid data in {path}: {err!r}") from err
 
 
 class Scheduler:
@@ -190,6 +277,37 @@ class Scheduler:
                     f"on {due}: {names}"
                 )
         return warnings
+
+    def find_next_available_slot(
+        self,
+        duration_minutes: int,
+        on: Optional[date] = None,
+        after: str = "06:00",
+        day_end: str = "22:00",
+    ) -> Optional[str]:
+        """Earliest "HH:MM" start on a day where a task of this length fits.
+
+        Looks at the pending timed tasks due that day (default: today) as busy blocks,
+        including their durations, so overlaps count. Sweeps through them in time order,
+        pushing the candidate start past each block that is in the way. Returns None if
+        nothing fits between ``after`` and ``day_end``.
+        """
+        if duration_minutes <= 0:
+            raise ValueError("duration_minutes must be positive")
+        on = on or date.today()
+        busy = sorted(
+            (to_minutes(t.time), to_minutes(t.time) + t.duration_minutes)
+            for t in self.get_pending_tasks()
+            if t.time and t.due_date == on
+        )
+        start = to_minutes(after)
+        for busy_start, busy_end in busy:
+            if start + duration_minutes <= busy_start:
+                break  # the gap before this block is big enough
+            start = max(start, busy_end)
+        if start + duration_minutes > to_minutes(day_end):
+            return None
+        return f"{start // 60:02d}:{start % 60:02d}"
 
     def mark_task_complete(self, task: Task) -> Optional[Task]:
         """Mark a task complete and schedule its next occurrence if it recurs.

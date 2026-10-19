@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "diagrams"))
 
 import pytest
 
+import formatting
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 
@@ -420,3 +422,195 @@ def test_owner_rejects_negative_available_minutes():
 def test_task_rejects_empty_description(description):
     with pytest.raises(ValueError):
         Task(description, 10)
+
+
+# --- weekly recurrence keeps the weekday -----------------------------------
+
+MONDAY = date(2026, 10, 12)
+
+
+@pytest.mark.parametrize(
+    "today, expected",
+    [
+        (date(2026, 10, 12), date(2026, 10, 19)),  # done on time -> next Monday
+        (date(2026, 10, 22), date(2026, 10, 26)),  # done late on a Thursday -> still a Monday
+        (date(2026, 10, 19), date(2026, 10, 26)),  # done exactly a week late -> strictly after today
+        (date(2026, 10, 1), date(2026, 10, 19)),  # done early -> at least 7 days after the old due date
+    ],
+)
+def test_weekly_task_keeps_its_weekday(today, expected):
+    task = Task("Clean cage", 25, frequency="weekly", due_date=MONDAY)
+
+    new_due = task.next_occurrence(today=today).due_date
+
+    assert new_due == expected
+    assert new_due.weekday() == MONDAY.weekday()
+
+
+def test_next_occurrence_with_explicit_today_for_daily_and_once():
+    assert Task("Walk", 30, frequency="daily", due_date=MONDAY).next_occurrence(today=date(2026, 10, 20)).due_date == date(2026, 10, 21)
+    assert Task("Vet", 30, frequency="once").next_occurrence(today=MONDAY) is None
+
+
+# --- next available slot ---------------------------------------------------
+
+
+def slot_scheduler(*timed):
+    """Scheduler whose only tasks are (time, minutes) blocks due today."""
+    return make_scheduler(Biscuit=[Task(f"T{i}", minutes, time=at) for i, (at, minutes) in enumerate(timed)])
+
+
+def test_free_day_returns_the_start_of_the_day():
+    assert slot_scheduler().find_next_available_slot(30) == "06:00"
+
+
+def test_slot_skips_past_a_busy_block_using_its_duration():
+    scheduler = slot_scheduler(("06:00", 90))  # busy until 07:30
+
+    assert scheduler.find_next_available_slot(30) == "07:30"
+
+
+def test_slot_uses_a_gap_between_tasks_when_it_fits_and_skips_it_when_it_does_not():
+    scheduler = slot_scheduler(("06:00", 60), ("08:00", 60))  # gap 07:00-08:00
+
+    assert scheduler.find_next_available_slot(60) == "07:00"
+    assert scheduler.find_next_available_slot(61) == "09:00"
+
+
+def test_slot_handles_overlapping_busy_blocks():
+    scheduler = slot_scheduler(("06:00", 120), ("07:00", 30), ("07:30", 90))  # all busy until 09:00
+
+    assert scheduler.find_next_available_slot(15) == "09:00"
+
+
+def test_slot_respects_after_and_returns_none_when_the_day_is_full():
+    scheduler = slot_scheduler(("06:00", 60))
+
+    assert scheduler.find_next_available_slot(30, after="12:00") == "12:00"
+    assert scheduler.find_next_available_slot(30, after="21:45") is None  # would run past 22:00
+    assert scheduler.find_next_available_slot(16 * 60) is None  # longer than the whole day window
+    assert scheduler.find_next_available_slot(30, after="22:00") is None
+
+
+def test_slot_ignores_completed_untimed_and_other_day_tasks():
+    done = Task("Done", 600, time="06:00")
+    done.mark_complete()
+    untimed = Task("Untimed", 600)
+    tomorrow = Task("Tomorrow", 600, time="06:00", due_date=date.today() + timedelta(days=1))
+    scheduler = make_scheduler(Biscuit=[done, untimed, tomorrow])
+
+    assert scheduler.find_next_available_slot(30) == "06:00"
+
+
+def test_slot_rejects_non_positive_duration():
+    with pytest.raises(ValueError):
+        slot_scheduler().find_next_available_slot(0)
+
+
+# --- saving and loading ----------------------------------------------------
+
+
+def sample_owner():
+    owner = Owner(name="Jason", available_minutes=95)
+    biscuit, luna = Pet("Biscuit", "dog"), Pet("Luna", "cat")
+    owner.add_pet(biscuit)
+    owner.add_pet(luna)
+    biscuit.add_task(Task("Walk", 30, priority="high", time="07:30", frequency="daily"))
+    done = Task("Feed", 10, due_date=date(2026, 3, 1))
+    done.mark_complete()
+    luna.add_task(done)
+    return owner
+
+
+def test_save_and_load_round_trips_everything(tmp_path):
+    owner = sample_owner()
+    path = tmp_path / "data.json"
+
+    owner.save_to_json(path)
+    loaded = Owner.load_from_json(path)
+
+    assert loaded == owner
+    walk = loaded.pets[0].tasks[0]
+    assert (walk.pet_name, walk.time, walk.frequency, walk.due_date) == ("Biscuit", "07:30", "daily", date.today())
+    assert loaded.pets[1].tasks[0].completed is True
+    assert loaded.pets[1].tasks[0].due_date == date(2026, 3, 1)
+
+
+def test_saved_file_is_readable_json_with_iso_dates_and_no_temp_file_left(tmp_path):
+    path = tmp_path / "data.json"
+
+    sample_owner().save_to_json(path)
+
+    data = json.loads(path.read_text())
+    assert data["pets"][1]["tasks"][0]["due_date"] == "2026-03-01"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_saving_again_overwrites_the_old_data(tmp_path):
+    path = tmp_path / "data.json"
+    sample_owner().save_to_json(path)
+
+    Owner(name="Empty", available_minutes=10).save_to_json(path)
+
+    loaded = Owner.load_from_json(path)
+    assert (loaded.name, loaded.pets) == ("Empty", [])
+
+
+def test_loaded_tasks_work_with_the_scheduler(tmp_path):
+    path = tmp_path / "data.json"
+    sample_owner().save_to_json(path)
+
+    scheduler = Scheduler(Owner.load_from_json(path))
+
+    assert [i.task.description for i in scheduler.generate_plan().scheduled] == ["Walk"]
+
+
+def test_load_from_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        Owner.load_from_json(tmp_path / "nope.json")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{ not json",
+        "[]",
+        '{"name": "Jason"}',  # missing fields
+        '{"name": "J", "available_minutes": 5, "pets": [{"name": "P", "species": "dog", "tasks": '
+        '[{"description": "x", "duration_minutes": 5, "priority": "urgent", "time": null, '
+        '"frequency": "once", "completed": false, "pet_name": "P", "due_date": "2026-01-01"}]}]}',  # bad priority
+    ],
+)
+def test_load_from_bad_file_raises_value_error(tmp_path, content):
+    path = tmp_path / "data.json"
+    path.write_text(content)
+
+    with pytest.raises(ValueError):
+        Owner.load_from_json(path)
+
+
+# --- formatting ------------------------------------------------------------
+
+
+def test_task_icon_matches_keywords_case_insensitively_with_a_default():
+    assert formatting.task_icon("Morning WALK") == "🦮"
+    assert formatting.task_icon("Give meds") == "💊"
+    assert formatting.task_icon("Something else") == "🐾"
+
+
+def test_priority_and_status_labels_are_color_coded():
+    assert "\033[31m" in formatting.priority_label("high")  # red
+    assert "\033[32m" in formatting.priority_label("low")  # green
+    assert "done" in formatting.status_label(True) and "to do" in formatting.status_label(False)
+
+
+def test_pretty_tables_contain_every_task():
+    pytest.importorskip("tabulate")
+    scheduler = Scheduler(sample_owner().__class__.from_dict(sample_owner().to_dict()))
+    owner = scheduler.owner
+
+    table = formatting.format_tasks(owner.get_all_tasks())
+    schedule = formatting.format_schedule(owner, scheduler.generate_plan())
+
+    assert "Walk" in table and "Feed" in table
+    assert "Walk" in schedule and "Total: 30/95 min" in schedule

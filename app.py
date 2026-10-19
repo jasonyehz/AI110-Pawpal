@@ -1,28 +1,48 @@
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
+from diagrams.formatting import PRIORITY_ICON, task_icon
 from diagrams.pawpal_system import Owner, Pet, Scheduler, Task
+
+DATA_FILE = Path(__file__).parent / "data.json"
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
 st.title("🐾 PawPal+")
 st.caption("Plan your pets' care tasks for the day based on time and priority.")
 
+
+
+def load_owner() -> Owner:
+    """Owner from data.json if it exists (a bad file is kept as .bak), else a new one."""
+    if DATA_FILE.exists():
+        try:
+            return Owner.load_from_json(DATA_FILE)
+        except (ValueError, OSError):
+            DATA_FILE.replace(DATA_FILE.with_name(DATA_FILE.name + ".bak"))
+            st.warning("Couldn't read data.json, so I started fresh. The old file was kept as data.json.bak.")
+    return Owner(name="Jordan", available_minutes=90)
+
+
 # Streamlit reruns this whole script on every interaction, so the Owner lives in
 # st.session_state (a per-session dict kept in server memory). It's only created
-# when the key is missing, so pets and tasks survive reruns.
-if "owner" not in st.session_state:
-    st.session_state["owner"] = Owner(name="Jordan", available_minutes=90)
+# when the key is missing, so pets and tasks survive reruns. On a fresh start it is
+# loaded from data.json, and the file is saved again at the bottom of every run.
+# (The isinstance check also replaces an Owner left over from before a code change.)
+if not isinstance(st.session_state.get("owner"), Owner):
+    st.session_state["owner"] = load_owner()
 owner: Owner = st.session_state["owner"]
 # Seed the time dropdowns once from the owner's value (they keep their own state after).
-st.session_state.setdefault("hours", owner.available_minutes // 60)
-st.session_state.setdefault("minutes", owner.available_minutes % 60)
+st.session_state.setdefault("hours", min(owner.available_minutes // 60, 7))
+st.session_state.setdefault("minutes", owner.available_minutes % 60 // 5 * 5)
 
 if st.button("Start over"):
     for key in ("owner", "hours", "minutes"):
         st.session_state.pop(key, None)  # delete the stored Owner and its time inputs...
-    st.rerun()  # ...and rerun so a fresh one is created above
+    DATA_FILE.unlink(missing_ok=True)  # ...and the saved file...
+    st.rerun()  # ...then rerun so a fresh owner is created above
 
 # --- Owner -----------------------------------------------------------------
 st.subheader("Owner")
@@ -110,6 +130,19 @@ if all_tasks:
     if not conflicts:
         st.success("No time conflicts between your tasks.")
 
+    with st.expander("Find a free time slot"):
+        col1, col2 = st.columns([2, 1], vertical_alignment="bottom")
+        with col1:
+            slot_minutes = st.selectbox("Task length (minutes)", list(range(5, 125, 5)), index=5, key="slot_minutes")
+        with col2:
+            find_slot = st.button("Find slot")
+        if find_slot:
+            slot = scheduler.find_next_available_slot(slot_minutes)
+            if slot:
+                st.success(f"Next free {slot_minutes}-minute slot today: **{slot}**")
+            else:
+                st.warning(f"No free {slot_minutes}-minute slot left today between 06:00 and 22:00.")
+
     # Mark a task done (recurring tasks automatically get their next occurrence).
     pending = scheduler.get_pending_tasks()
     if pending:
@@ -153,10 +186,10 @@ if all_tasks:
             [
                 {
                     "Pet": t.pet_name,
-                    "Task": t.description,
+                    "Task": f"{task_icon(t.description)} {t.description}",
                     "Time": t.time or "-",
                     "Minutes": t.duration_minutes,
-                    "Priority": t.priority,
+                    "Priority": f"{PRIORITY_ICON[t.priority]} {t.priority}",
                     "Repeats": t.frequency,
                     "Due": t.due_date.isoformat(),
                     "Status": "✅ Done" if t.completed else "⏳ To do",
@@ -187,8 +220,8 @@ if st.button("Generate schedule"):
                 {
                     "Minutes": f"{item.start_minute}-{item.end_minute}",
                     "Pet": item.task.pet_name,
-                    "Task": item.task.description,
-                    "Priority": item.task.priority,
+                    "Task": f"{task_icon(item.task.description)} {item.task.description}",
+                    "Priority": f"{PRIORITY_ICON[item.task.priority]} {item.task.priority}",
                     "Duration": item.task.duration_minutes,
                 }
                 for item in plan.scheduled
@@ -202,3 +235,6 @@ if st.button("Generate schedule"):
 
     with st.expander("Why this plan?"):
         st.text(scheduler.explain_plan())
+
+# --- Save ------------------------------------------------------------------
+owner.save_to_json(DATA_FILE)  # persist pets and tasks so they survive a restart

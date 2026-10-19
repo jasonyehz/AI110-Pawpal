@@ -8,6 +8,10 @@ classDiagram
         +List~Pet~ pets
         +add_pet(pet) void
         +get_all_tasks() List~Task~
+        +to_dict() dict
+        +from_dict(data)$ Owner
+        +save_to_json(path) void
+        +load_from_json(path)$ Owner
     }
 
     class Pet {
@@ -16,6 +20,8 @@ classDiagram
         +List~Task~ tasks
         +add_task(task) void
         +remove_task(task) void
+        +to_dict() dict
+        +from_dict(data)$ Pet
     }
 
     class Task {
@@ -29,8 +35,10 @@ classDiagram
         +date due_date
         +priority_rank() int
         +mark_complete() void
-        +next_occurrence() Task
+        +next_occurrence(today) Task
         +reset() void
+        +to_dict() dict
+        +from_dict(data)$ Task
     }
 
     class ScheduledTask {
@@ -61,6 +69,7 @@ classDiagram
         +sort_tasks(tasks) List~Task~
         +sort_by_time(tasks) List~Task~
         +detect_conflicts(tasks) List~String~
+        +find_next_available_slot(duration, on, after, day_end) String
         +mark_task_complete(task) Task
         +generate_plan() Plan
         +explain_plan() String
