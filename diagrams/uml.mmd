@@ -12,15 +12,19 @@ classDiagram
         +String species
         +List~Task~ tasks
         +add_task(task) void
+        +remove_task(task) void
     }
 
     class Task {
-        +String title
+        +String description
         +int duration_minutes
         +String priority
+        +String time
+        +String frequency
         +bool completed
         +String pet_name
         +mark_complete() void
+        +reset() void
     }
 
     class ScheduledTask {
@@ -37,6 +41,9 @@ classDiagram
     class Scheduler {
         +Owner owner
         +Plan plan
+        +get_pending_tasks() List~Task~
+        +get_tasks_for_pet(pet_name) List~Task~
+        +sort_tasks(tasks) List~Task~
         +generate_plan() Plan
         +explain_plan() String
     }

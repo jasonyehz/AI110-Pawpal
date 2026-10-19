@@ -22,6 +22,18 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## Implementation summary
+
+The core logic lives in `diagrams/pawpal_system.py` and is built from a few small classes (the UML is in `diagrams/uml.mmd`):
+
+- **Task** (dataclass): one care activity with a description, duration, priority, optional preferred time, frequency (once/daily/weekly), and completion status. It validates its inputs and can be marked complete.
+- **Pet** (dataclass): stores a pet's name and species plus its list of tasks. Adding a task tags it with the pet's name.
+- **Owner** (dataclass): holds the owner's available minutes and manages multiple pets. `get_all_tasks()` returns every pet's tasks together in one list.
+- **Scheduler**: the brain. It reads tasks through `owner.get_all_tasks()` (never from a single pet), skips completed ones, sorts by priority, then preferred time, then shortest first, and fits them into the owner's available time.
+- **Plan / ScheduledTask** (dataclasses): the scheduler's output. A plan holds the scheduled tasks (each with a start and end minute) and the skipped tasks with the reason each didn't fit, which `explain_plan()` turns into text.
+
+**How they work together:** `Owner` has many `Pet`s, each `Pet` has many `Task`s. A `Scheduler` is given an `Owner`, pulls all of its tasks, and produces a `Plan`. `diagrams/main.py` is a demo script that builds an owner with three pets and prints the day's schedule. The Streamlit UI in `app.py` is not connected yet.
+
 ## Getting started
 
 ### Setup
@@ -46,13 +58,14 @@ pip install -r requirements.txt
 
 Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
 
-```
-# e.g.:
-# Daily plan for Biscuit (Golden Retriever):
-#   08:00 — Morning walk (30 min) [priority: high]
-#   09:00 — Feeding (10 min) [priority: high]
-#   ...
-```
+Today's Schedule for Jason
+----------------------------------------
+0-30 min: Morning walk (Biscuit, high, 30 min)
+30-40 min: Breakfast (Luna, high, 10 min)
+40-65 min: Clean cage (Kiwi, medium, 25 min)
+65-85 min: Evening play (Biscuit, low, 20 min)
+----------------------------------------
+Total: 85/90 min
 
 ## 🧪 Testing PawPal+
 
