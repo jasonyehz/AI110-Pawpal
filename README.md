@@ -22,9 +22,21 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## ✨ Features
+
+- **Sorting by time:** tasks are ordered by their "HH:MM" time, earliest first, with untimed tasks last. Times are compared as numbers, so "9:05" sorts before "12:00".
+- **Priority ordering:** the daily plan takes high-priority tasks first, then earlier preferred time, then shorter tasks.
+- **Filtering:** view tasks by pet, by completion status (pending or completed), or both.
+- **Conflict warnings:** tasks set for the exact same date and time trigger a warning, whether they belong to the same pet or different pets. It's a warning, never a crash.
+- **Daily and weekly recurrence:** completing a daily task creates the next one for the following day, and a weekly task for 7 days later. The new task is never scheduled in the past, even if the old one was overdue.
+- **Time-budget planning:** tasks are fit into the owner's available time. Anything that doesn't fit is skipped with a reason, and smaller tasks can still fill the gap.
+- **Plan explanations:** every plan says how much time was used, what was skipped, and why.
+- **Due-date awareness:** only tasks due today or earlier appear in today's plan, so tomorrow's recurring tasks stay out.
+- **Input validation:** empty descriptions, non-positive durations, unknown priorities or frequencies, malformed "HH:MM" times, and negative available time are rejected with clear errors.
+
 ## Implementation summary
 
-The core logic lives in `diagrams/pawpal_system.py` and is built from a few small classes (the UML is in `diagrams/uml.mmd`):
+The core logic lives in `diagrams/pawpal_system.py` and is built from a few small classes (the final UML is in `diagrams/uml_final.mmd`):
 
 - **Task** (dataclass): one care activity with a description, duration, priority, optional preferred time, frequency (once/daily/weekly), and completion status. It validates its inputs and can be marked complete.
 - **Pet** (dataclass): stores a pet's name and species plus its list of tasks. Adding a task tags it with the pet's name.
@@ -32,7 +44,7 @@ The core logic lives in `diagrams/pawpal_system.py` and is built from a few smal
 - **Scheduler**: the brain. It reads tasks through `owner.get_all_tasks()` (never from a single pet), skips completed ones, sorts by priority, then preferred time, then shortest first, and fits them into the owner's available time.
 - **Plan / ScheduledTask** (dataclasses): the scheduler's output. A plan holds the scheduled tasks (each with a start and end minute) and the skipped tasks with the reason each didn't fit, which `explain_plan()` turns into text.
 
-**How they work together:** `Owner` has many `Pet`s, each `Pet` has many `Task`s. A `Scheduler` is given an `Owner`, pulls all of its tasks, and produces a `Plan`. `diagrams/main.py` is a demo script that builds an owner with three pets and prints the day's schedule. The Streamlit UI in `app.py` is not connected yet.
+**How they work together:** `Owner` has many `Pet`s, each `Pet` has many `Task`s. A `Scheduler` is given an `Owner`, pulls all of its tasks, and produces a `Plan`. `diagrams/main.py` is a demo script that builds an owner with three pets and prints the results to the terminal, and the Streamlit UI in `app.py` lets a user do the same interactively.
 
 ## Getting started
 
@@ -56,16 +68,19 @@ pip install -r requirements.txt
 
 ## 🖥️ Sample Output
 
-Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
+A generated daily plan from `python3 diagrams/main.py` (the full run is in the Demo Walkthrough below):
 
+```
 Today's Schedule for Jason
 ----------------------------------------
-0-30 min: Morning walk (Biscuit, high, 30 min)
-30-40 min: Breakfast (Luna, high, 10 min)
-40-65 min: Clean cage (Kiwi, medium, 25 min)
-65-85 min: Evening play (Biscuit, low, 20 min)
+0-5 min: Give meds (Luna, high, 5 min)
+5-20 min: Vet call (Biscuit, medium, 15 min)
+20-40 min: Evening play (Biscuit, low, 20 min)
+40-55 min: Playtime (Luna, low, 15 min)
+55-60 min: Brush fur (Luna, low, 5 min)
 ----------------------------------------
-Total: 85/90 min
+Total: 60/90 min
+```
 
 ## 🧪 Testing PawPal+
 
@@ -118,12 +133,101 @@ All of this lives in `diagrams/pawpal_system.py`.
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+Run the app with `streamlit run app.py`, or run the terminal demo with `python3 diagrams/main.py`.
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+### What you can do in the app
+
+- **Owner:** set your name and how much time you have today, using hour and minute dropdowns (up to 7h 55m, in 5-minute steps).
+- **Pets:** add as many pets as you like (name and species). Duplicate or empty names are rejected.
+- **Tasks:** add a task for a pet with a description, duration, priority, frequency (once, daily, weekly), and an optional preferred time.
+- **Task list:** sort by time, priority, or order added, and filter by pet and status. Time conflicts show up as warnings right above the list.
+- **Mark complete:** finish a task; if it repeats, the next one is created automatically.
+- **Generate schedule:** build today's plan, see what was skipped and why, and open "Why this plan?" for the explanation.
+- **Start over:** clear everything and begin again. Your data lives in the Streamlit session.
+
+### Example workflow
+
+1. Set the owner's name and available time, for example 1 hour 30 minutes.
+2. Add a pet, for example Biscuit the dog, then add a second pet, Luna the cat.
+3. Add tasks, such as a 30-minute "Morning walk" (high, daily, 07:30) for Biscuit and a 10-minute "Breakfast" (high, daily, 08:00) for Luna.
+4. Add a third task at the same time as one of the others. A warning appears: the two tasks can't both happen at that time, so change one.
+5. Sort the list by time, then filter to just Luna's pending tasks.
+6. Mark "Breakfast" complete and see that tomorrow's Breakfast is created.
+7. Click **Generate schedule** to see today's plan and how much of your time it uses.
+
+### Scheduler behaviors shown
+
+- **Sorting:** tasks added out of order come back in time order, with untimed tasks last.
+- **Filtering:** by pet, by completed, by pending, and by combinations of those.
+- **Conflict warnings:** one clash between different pets (12:00) and one between tasks for the same pet (19:00).
+- **Recurrence:** a completed daily task is due again the next day, and a weekly task a week later.
+- **Planning:** high-priority tasks go first, completed tasks are left out, and the plan stays within the available time.
+
+### Sample CLI output
+
+Output of `python3 diagrams/main.py` (dates reflect the day it was run):
+
+```
+All tasks, in the order added:
+  18:30  Evening play (Biscuit, todo)
+  07:30  Morning walk (Biscuit, todo)
+  12:00  Vet call (Biscuit, todo)
+  08:00  Breakfast (Luna, done)
+  --:--  Brush fur (Luna, todo)
+  19:00  Give meds (Luna, todo)
+  19:00  Playtime (Luna, todo)
+  12:00  Clean cage (Kiwi, todo)
+
+Sorted by time:
+  07:30  Morning walk (Biscuit, todo)
+  08:00  Breakfast (Luna, done)
+  12:00  Vet call (Biscuit, todo)
+  12:00  Clean cage (Kiwi, todo)
+  18:30  Evening play (Biscuit, todo)
+  19:00  Give meds (Luna, todo)
+  19:00  Playtime (Luna, todo)
+  --:--  Brush fur (Luna, todo)
+
+Only Biscuit's tasks:
+  18:30  Evening play (Biscuit, todo)
+  07:30  Morning walk (Biscuit, todo)
+  12:00  Vet call (Biscuit, todo)
+
+Completed tasks:
+  08:00  Breakfast (Luna, done)
+
+Pending tasks:
+  18:30  Evening play (Biscuit, todo)
+  07:30  Morning walk (Biscuit, todo)
+  12:00  Vet call (Biscuit, todo)
+  --:--  Brush fur (Luna, todo)
+  19:00  Give meds (Luna, todo)
+  19:00  Playtime (Luna, todo)
+  12:00  Clean cage (Kiwi, todo)
+
+Luna's pending tasks, sorted by time:
+  19:00  Give meds (Luna, todo)
+  19:00  Playtime (Luna, todo)
+  --:--  Brush fur (Luna, todo)
+
+Conflict check:
+  WARNING: Conflict across pets: 2 tasks at 12:00 on 2026-10-18: Vet call (Biscuit), Clean cage (Kiwi)
+  WARNING: Conflict for Luna: 2 tasks at 19:00 on 2026-10-18: Give meds (Luna), Playtime (Luna)
+
+Completing a daily and a weekly task creates the next occurrence:
+  Morning walk (daily, due 2026-10-18) -> next due 2026-10-19
+  Clean cage (weekly, due 2026-10-18) -> next due 2026-10-25
+  Biscuit now has 4 tasks, Kiwi has 2
+
+Today's Schedule for Jason
+----------------------------------------
+0-5 min: Give meds (Luna, high, 5 min)
+5-20 min: Vet call (Biscuit, medium, 15 min)
+20-40 min: Evening play (Biscuit, low, 20 min)
+40-55 min: Playtime (Luna, low, 15 min)
+55-60 min: Brush fur (Luna, low, 5 min)
+----------------------------------------
+Total: 60/90 min
+```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->

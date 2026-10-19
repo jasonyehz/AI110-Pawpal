@@ -96,23 +96,76 @@ if owner.pets:
 else:
     st.info("Add a pet before adding tasks.")
 
+scheduler = Scheduler(owner)
 all_tasks = owner.get_all_tasks()
+
+if flash := st.session_state.pop("flash", None):
+    st.success(flash)
+
 if all_tasks:
-    st.write("Current tasks:")
-    st.table(
-        [
-            {
-                "Pet": t.pet_name,
-                "Task": t.description,
-                "Minutes": t.duration_minutes,
-                "Priority": t.priority,
-                "Preferred time": t.time or "-",
-                "Frequency": t.frequency,
-                "Due": t.due_date.isoformat(),
-            }
-            for t in all_tasks
-        ]
+    # Conflicts: shown right next to the tasks so the owner sees them as soon as they happen.
+    conflicts = scheduler.detect_conflicts()
+    for conflict in conflicts:
+        st.warning(f"⚠️ {conflict}. You can't do both at once, so change one task's preferred time.")
+    if not conflicts:
+        st.success("No time conflicts between your tasks.")
+
+    # Mark a task done (recurring tasks automatically get their next occurrence).
+    pending = scheduler.get_pending_tasks()
+    if pending:
+        col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
+        with col1:
+            choice = st.selectbox(
+                "Mark a task complete",
+                range(len(pending)),
+                format_func=lambda i: f"{pending[i].description} ({pending[i].pet_name}, due {pending[i].due_date})",
+            )
+        with col2:
+            if st.button("Mark complete"):
+                task = pending[choice]
+                next_task = scheduler.mark_task_complete(task)
+                message = f"Marked '{task.description}' ({task.pet_name}) complete."
+                if next_task:
+                    message += f" Next {task.frequency} task created for {next_task.due_date}."
+                st.session_state["flash"] = message
+                st.rerun()  # redraw so the table below shows the change
+
+    # View controls: filter with Scheduler.filter_tasks, order with sort_by_time / sort_tasks.
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        pet_filter = st.selectbox("Show pet", ["All pets"] + [p.name for p in owner.pets], key="filter_pet")
+    with col2:
+        status_filter = st.selectbox("Show status", ["All", "Pending", "Completed"], key="filter_status")
+    with col3:
+        sort_choice = st.selectbox("Sort by", ["Time", "Priority", "Order added"], key="sort_by")
+
+    visible = scheduler.filter_tasks(
+        completed={"All": None, "Pending": False, "Completed": True}[status_filter],
+        pet_name=None if pet_filter == "All pets" else pet_filter,
     )
+    if sort_choice == "Time":
+        visible = scheduler.sort_by_time(visible)
+    elif sort_choice == "Priority":
+        visible = scheduler.sort_tasks(visible)
+
+    if visible:
+        st.table(
+            [
+                {
+                    "Pet": t.pet_name,
+                    "Task": t.description,
+                    "Time": t.time or "-",
+                    "Minutes": t.duration_minutes,
+                    "Priority": t.priority,
+                    "Repeats": t.frequency,
+                    "Due": t.due_date.isoformat(),
+                    "Status": "✅ Done" if t.completed else "⏳ To do",
+                }
+                for t in visible
+            ]
+        )
+    else:
+        st.info("No tasks match these filters.")
 elif owner.pets:
     st.info("No tasks yet. Add one above.")
 
@@ -122,36 +175,30 @@ st.divider()
 st.subheader("Build Schedule")
 
 if st.button("Generate schedule"):
-    if not all_tasks:
-        st.warning("Add at least one task first.")
-    else:
-        scheduler = Scheduler(owner)
-        plan = scheduler.generate_plan()
+    plan = scheduler.generate_plan()
 
+    if plan.scheduled:
         st.success(
             f"Scheduled {len(plan.scheduled)} task(s): "
             f"{plan.total_minutes} of {owner.available_minutes} minutes used."
         )
+        st.table(
+            [
+                {
+                    "Minutes": f"{item.start_minute}-{item.end_minute}",
+                    "Pet": item.task.pet_name,
+                    "Task": item.task.description,
+                    "Priority": item.task.priority,
+                    "Duration": item.task.duration_minutes,
+                }
+                for item in plan.scheduled
+            ]
+        )
+    else:
+        st.info("Nothing to schedule right now: no pending tasks are due today.")
 
-        if plan.scheduled:
-            st.table(
-                [
-                    {
-                        "Minutes": f"{item.start_minute}-{item.end_minute}",
-                        "Pet": item.task.pet_name,
-                        "Task": item.task.description,
-                        "Priority": item.task.priority,
-                        "Duration": item.task.duration_minutes,
-                    }
-                    for item in plan.scheduled
-                ]
-            )
+    for task, reason in plan.skipped:
+        st.warning(f"Skipped {task.description} ({task.pet_name}): {reason}")
 
-        for warning in scheduler.detect_conflicts():
-            st.warning(warning)
-
-        for task, reason in plan.skipped:
-            st.warning(f"Skipped {task.description} ({task.pet_name}): {reason}")
-
-        with st.expander("Why this plan?"):
-            st.text(scheduler.explain_plan())
+    with st.expander("Why this plan?"):
+        st.text(scheduler.explain_plan())

@@ -1,4 +1,7 @@
 classDiagram
+    %% Final PawPal+ design. Matches diagrams/pawpal_system.py.
+    %% Task, ScheduledTask, Plan, Pet and Owner are dataclasses; Scheduler is a plain class.
+
     class Owner {
         +String name
         +int available_minutes
@@ -24,6 +27,7 @@ classDiagram
         +bool completed
         +String pet_name
         +date due_date
+        +priority_rank() int
         +mark_complete() void
         +next_occurrence() Task
         +reset() void
@@ -37,7 +41,14 @@ classDiagram
 
     class Plan {
         +List~ScheduledTask~ scheduled
-        +List~Task, String~ skipped
+        +List~SkippedEntry~ skipped
+        +total_minutes() int
+    }
+
+    class SkippedEntry {
+        <<tuple>>
+        +Task task
+        +String reason
     }
 
     class Scheduler {
@@ -45,20 +56,27 @@ classDiagram
         +Plan plan
         +get_pending_tasks() List~Task~
         +get_due_tasks(on) List~Task~
-        +detect_conflicts(tasks) List~String~
-        +mark_task_complete(task) Task
         +get_tasks_for_pet(pet_name) List~Task~
         +filter_tasks(completed, pet_name) List~Task~
         +sort_tasks(tasks) List~Task~
         +sort_by_time(tasks) List~Task~
+        +detect_conflicts(tasks) List~String~
+        +mark_task_complete(task) Task
         +generate_plan() Plan
         +explain_plan() String
     }
 
+    note for Task "priority: low | medium | high\nfrequency: once | daily | weekly\ntime: optional HH:MM"
+    note for Scheduler "Reads tasks only through\nOwner.get_all_tasks(),\nnever from a single Pet"
+
     Owner "1" *-- "0..*" Pet : has
     Pet "1" *-- "0..*" Task : has
+    Task ..> Task : next_occurrence creates
     Scheduler --> Owner : plans for
-    Scheduler --> Plan : produces
-    Plan "1" *-- "0..*" ScheduledTask : contains
+    Scheduler ..> Pet : adds next occurrence to
+    Scheduler ..> Task : sorts, filters, checks conflicts
+    Scheduler --> "0..1" Plan : produces
+    Plan "1" *-- "0..*" ScheduledTask : scheduled
+    Plan "1" *-- "0..*" SkippedEntry : skipped
     ScheduledTask --> Task : wraps
-    Plan ..> Task : skipped
+    SkippedEntry --> Task : refers to
